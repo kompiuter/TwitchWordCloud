@@ -16,11 +16,30 @@ namespace TwitchIRC
         public bool Cancel { get; set; }
 
         private readonly string _server = "irc.chat.twitch.tv";
-        private readonly string _username = "cheetahk";
-        private readonly string _nickname = "cheetahk";
-        private readonly string _oathPass = "oauth:n4h74d8yc9woy9hg7oct6nzqsspu69";
+        
+        /*
+         * Register on http://www.twitch.tv
+         * Username and nickname are your username that you registered with
+         */
+        private readonly string _username = "your_twitch_username";
+        private readonly string _nickname = "your_twitch_username";
+
+        /*
+         * After you have registered on twitch, obtain an OAuth password
+         * from https://twitchapps.com/tmi/
+         * and enter it below in the form of 'oath:n928jd892jd8h...'
+         */
+        private readonly string _oathPass = "oath:your_oath_pass";
+
         private IrcClient _client;
         private IrcUser _ircUser;
+
+        /*
+         * Twitch channels can be found on http://www.twitch.tv
+         * Open any stream on twitch and the channel can be found in the URL
+         * For example in https://www.twitch.tv/lirik the channel is 'lirik'
+         * Make sure the channel is live, otherwise there are probably no people commenting on it
+         */
         private string _channel;
 
         public void Connect(string channel)
