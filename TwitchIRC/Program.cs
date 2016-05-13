@@ -28,9 +28,9 @@ namespace TwitchIRC
         static Semaphore full = new Semaphore(0, 50);
         static Mutex mutex = new Mutex(false);
 
-        // Dictionary that holds the word cloud
-        static Dictionary<string, int> WordCloudDic = new Dictionary<string, int>();
-        static object wordCloudLock = new object();
+        // Dictionary that holds the word frequencies
+        static Dictionary<string, int> WordFrequency = new Dictionary<string, int>();
+        static object wordFreqLock = new object();
 
         static void Main(string[] args)
         {
@@ -51,14 +51,23 @@ namespace TwitchIRC
                     new Thread(CommentConsumer).Start();
                     new Thread(CommentConsumer).Start();
 
+                    Console.WriteLine($"Word frequency will be displayed in {options.TimeToFetch / 1000}s");
+
+                    // UI thread sleeps for time indicated by user after which threads are cancelled
                     Thread.Sleep((int)options.TimeToFetch);
                     _cancel = true;
 
-                    Console.WriteLine("\n***Word Frequency***");
-                    WordCloudDic.OrderBy(k => k.Key);
-                    foreach (var pair in WordCloudDic.OrderByDescending(i => i.Value).Take(15))
+                    Console.Clear();
+                    if (WordFrequency.Count == 0)
+                        Console.WriteLine("No comments were fetched, please try another channel");
+                    else
                     {
-                        Console.WriteLine($"({pair.Value}) {pair.Key}");
+                        Console.WriteLine("***Word Frequency***");
+                        WordFrequency.OrderBy(k => k.Key);
+                        foreach (var pair in WordFrequency.OrderByDescending(i => i.Value).Take(15))
+                        {
+                            Console.WriteLine($"({pair.Value}) {pair.Key}");
+                        }
                     }
                 }
             }
@@ -96,7 +105,7 @@ namespace TwitchIRC
                     client.Cancel = true;
 
                 // Uncomment to observe comments being received in real-time
-                Console.WriteLine($"{comment} produced");
+                //Console.WriteLine($"{comment} produced");
             };
             client.ErrorReceived += (s, error) =>
             {
@@ -132,7 +141,7 @@ namespace TwitchIRC
                 // Split comment into words
                 string[] words = item.Split(' ');
 
-                lock (wordCloudLock)
+                lock (wordFreqLock)
                 {
                     // Add words to word cloud
                     foreach (var rawWord in words)
@@ -140,13 +149,13 @@ namespace TwitchIRC
                         string word = rawWord.Trim();
 
                         // If dictionary does not contain the word, add a new entry
-                        if (!WordCloudDic.Keys.Any(s => s == word))
+                        if (!WordFrequency.Keys.Any(s => s == word))
                         {
-                            WordCloudDic.Add(word, 1);
+                            WordFrequency.Add(word, 1);
                         }
                         else // Dictionary already contains word, increment its count
                         {
-                            ++WordCloudDic[word];
+                            ++WordFrequency[word];
                         }
                     }
                 } // end lock
