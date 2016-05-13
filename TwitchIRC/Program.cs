@@ -34,24 +34,37 @@ namespace TwitchIRC
 
         static void Main(string[] args)
         {
-            var producerThread1 = new Thread(new ParameterizedThreadStart(CommentFetcher));
-            var producerThread2 = new Thread(new ParameterizedThreadStart(CommentFetcher));
-            var consumerThread1 = new Thread(CommentConsumer);
-            var consumerThread2 = new Thread(CommentConsumer);
-
-            producerThread1.Start("nightblue3");
-            //producerThread2.Start("dota2ruhub");
-            consumerThread1.Start();
-            consumerThread2.Start();
-
-            Thread.Sleep(5000);
-            _cancel = true;
-
-            Console.WriteLine("\n***Word Frequency***");
-            WordCloudDic.OrderBy(k => k.Key);
-            foreach (var pair in WordCloudDic.OrderByDescending(i => i.Value).Take(15))
+            var options = new Options();
+            // Valid arguments
+            if (CommandLine.Parser.Default.ParseArguments(args, options))
             {
-                Console.WriteLine($"({pair.Value}) {pair.Key}");
+                if (options.TimeToFetch < 2000)
+                    Console.WriteLine("Time must be at least 2000ms");
+                else
+                {
+                    // Create one producer thread for each channel & ignore duplicate channels
+                    foreach (var channel in options.Channels.Split(',').Distinct())
+                    {
+                        new Thread(new ParameterizedThreadStart(CommentFetcher)).Start(channel);
+                    }
+                    // Create two consumer threads
+                    new Thread(CommentConsumer).Start();
+                    new Thread(CommentConsumer).Start();
+
+                    Thread.Sleep((int)options.TimeToFetch);
+                    _cancel = true;
+
+                    Console.WriteLine("\n***Word Frequency***");
+                    WordCloudDic.OrderBy(k => k.Key);
+                    foreach (var pair in WordCloudDic.OrderByDescending(i => i.Value).Take(15))
+                    {
+                        Console.WriteLine($"({pair.Value}) {pair.Key}");
+                    }
+                }
+            }
+            else // Invalid arguments
+            {
+                Console.WriteLine("Invalid arguments supplied");
             }
 
             Console.ReadLine();
