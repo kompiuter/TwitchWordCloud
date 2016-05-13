@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 
 
@@ -12,7 +13,14 @@ namespace TwitchIRC
         const int BUFFER_SIZE = 50;
         static string[] Buffer = new string[BUFFER_SIZE];
 
+        /// <summary>
+        /// Set to true to cancel any running threads
+        /// </summary>
         static volatile bool _cancel = false;
+
+        /// <summary>
+        /// Number of items currently in buffer
+        /// </summary>
         static int count = -1;
         static object countLock = new object();
 
@@ -20,11 +28,9 @@ namespace TwitchIRC
         static Semaphore full = new Semaphore(0, 50);
         static Mutex mutex = new Mutex(false);
 
-        // Dictionary that simulates word cloud
+        // Dictionary that holds the word cloud
         static Dictionary<string, int> WordCloudDic = new Dictionary<string, int>();
         static object wordCloudLock = new object();
-
-        static Random rnd = new Random();
 
         static void Main(string[] args)
         {
@@ -33,18 +39,19 @@ namespace TwitchIRC
             var consumerThread1 = new Thread(CommentConsumer);
             var consumerThread2 = new Thread(CommentConsumer);
 
-            //producerThread1.Start("esl_csgo");
-            producerThread2.Start("sodapoppin");
+            producerThread1.Start("nightblue3");
+            //producerThread2.Start("dota2ruhub");
             consumerThread1.Start();
             consumerThread2.Start();
 
-            Thread.Sleep(100000);
+            Thread.Sleep(5000);
             _cancel = true;
 
+            Console.WriteLine("\n***Word Frequency***");
             WordCloudDic.OrderBy(k => k.Key);
             foreach (var pair in WordCloudDic.OrderByDescending(i => i.Value).Take(15))
             {
-                Console.WriteLine($"{pair.Key} ({pair.Value})");
+                Console.WriteLine($"({pair.Value}) {pair.Key}");
             }
 
             Console.ReadLine();
@@ -52,26 +59,22 @@ namespace TwitchIRC
 
         static void CommentFetcher(object channel)
         {
-            if (channel == null)
-                throw new ArgumentNullException(nameof(channel));
-
-            var client = new TwitchClient(channel.ToString());
-            string localMessage = string.Empty;
-            client.CommentReceived += (s, e) =>
+            var client = new TwitchClient();
+            client.CommentReceived += (s, comment) =>
             {
                 empty.WaitOne();
                 mutex.WaitOne();
-
-                // START CRITICAL SECTION
+                 
+                // *** START CRITICAL SECTION ***
 
                 lock (countLock)
                 {
                     ++count;
                 }
 
-                Buffer[count] = e;
+                Buffer[count] = comment;
 
-                // END CRITICAL SECTON
+                // *** END CRITICAL SECTON ***
 
                 mutex.ReleaseMutex();
                 full.Release();
@@ -79,7 +82,14 @@ namespace TwitchIRC
                 if (_cancel == true)
                     client.Cancel = true;
 
-                //Console.WriteLine($"{e} produced");
+                // Uncomment to observe comments being received in real-time
+                Console.WriteLine($"{comment} produced");
+            };
+            client.ErrorReceived += (s, error) =>
+            {
+                Console.WriteLine(error);
+                Console.WriteLine("Aborting...");
+                _cancel = true;
             };
 
             client.Connect(channel.ToString());
@@ -92,7 +102,7 @@ namespace TwitchIRC
                 full.WaitOne();
                 mutex.WaitOne();
 
-                // START CRITICAL SECTION WITH BUFFER
+                // *** START CRITICAL SECTION ***
 
                 string item = Buffer[count];
 
@@ -101,7 +111,7 @@ namespace TwitchIRC
                     --count;
                 }
 
-                // END CRITICAL SECTION  WITH BUFFER
+                // *** END CRITICAL SECTON ***
 
                 mutex.ReleaseMutex();
                 empty.Release();
@@ -121,37 +131,14 @@ namespace TwitchIRC
                         {
                             WordCloudDic.Add(word, 1);
                         }
-                        else // Dictionary already contains word, so increment its count
+                        else // Dictionary already contains word, increment its count
                         {
                             ++WordCloudDic[word];
                         }
                     }
-                }
-            }
+                } // end lock
+            } // end while
         }
     }
 }
 
-
-//using ChatSharp;
-//using System;
-//using System.Collections.Generic;
-//using System.Linq;
-//using System.Text;
-//using System.Threading.Tasks;
-
-//namespace TwitchIRC
-//{
-//    class Program
-//    {
-//        static void Main(string[] args)
-//        {
-//            var client = new TwitchClient();
-//            client.CommentReceived += (s, e) => Console.WriteLine(e.Message);
-//            client.ErrorReceived += (s, e) => Console.WriteLine(e.Error);
-//            client.Connect("pgl");
-
-//            Console.ReadLine();
-//        }
-//    }
-//}
