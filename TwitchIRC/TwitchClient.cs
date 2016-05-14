@@ -2,18 +2,26 @@
 using ChatSharp.Events;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace TwitchIRC
 {
     class TwitchClient
     {
+        public TwitchClient(uint timeToRun)
+        {
+            _timeToRun = timeToRun;
+        }
+
         public event EventHandler<string> CommentReceived;
         public event EventHandler<string> ErrorReceived;
 
         public bool Cancel { get; set; }
+        private uint _timeToRun = 0;
 
         private readonly string _server = "irc.chat.twitch.tv";
         
@@ -21,15 +29,15 @@ namespace TwitchIRC
          * Register on http://www.twitch.tv
          * Username and nickname are your username that you registered with
          */
-        private readonly string _username = "your_twitch_username";
-        private readonly string _nickname = "your_twitch_username";
+        private readonly string _username = "cheetahk";
+        private readonly string _nickname = "cheetahk";
 
         /*
          * After you have registered on twitch, obtain an OAuth password
          * from https://twitchapps.com/tmi/
          * and enter it below in the form of 'oath:n928jd892jd8h...'
          */
-        private readonly string _oathPass = "oath:your_oath_pass";
+        private readonly string _oathPass = "oauth:n4h74d8yc9woy9hg7oct6nzqsspu69";
 
         private IrcClient _client;
         private IrcUser _ircUser;
@@ -47,6 +55,9 @@ namespace TwitchIRC
             if (string.IsNullOrWhiteSpace(channel))
                 throw new ArgumentNullException("Channel can't be null");
 
+            Timer timer = new Timer(StopRunning);
+            timer.Change(DateTime.Now.Millisecond + _timeToRun, Timeout.Infinite);
+
             // Channel should start with a hashtag, user might have already passed a hashtag
             // Ensure only one hashtag is prepended
             _channel = $"#{channel.Replace("#", "")}";
@@ -62,12 +73,15 @@ namespace TwitchIRC
             
             while (!Cancel)
                 ; // Do nothing
+        }
 
-            //---Code from this point forward executed only after cancel is set to true---
-
+        public void StopRunning(object p)
+        {
             // Unsub from event to prevent memory leak
             _client.ChannelMessageRecieved -= _client_ChannelMessageReceived;
             _client.Quit("User cancel");
+
+            Cancel = true;
         }
 
         private void _client_NoticeRecieved(object sender, IrcNoticeEventArgs e)
