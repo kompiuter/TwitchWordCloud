@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -12,21 +13,17 @@ namespace TwitchIRC
 {
     class Program
     {
-        const int BUFFER_SIZE = 50;
-        static string[] Buffer = new string[BUFFER_SIZE];
-        
-        // Number of items currently in buffer
-        static int count = -1;
-
-        static uint _timeToRun = 2000;
         static bool _cancel = false;
 
-        static Semaphore empty = new Semaphore(50, 50);
-        static Semaphore full = new Semaphore(0, 50);
-        static Mutex mutex = new Mutex(false);
+        static volatile int _count = 0;
+        static object _countLock = new object();
 
+        static Mutex _commentMutex = new Mutex(false);
+        static Mutex _wordFreqMutex = new Mutex(false);
+
+        static List<string> CommentList { get; set; } = new List<string>();
         // Dictionary that holds the word frequencies
-        static Dictionary<string, int> WordFrequency = new Dictionary<string, int>();
+        static Dictionary<string, int> WordFrequency { get; set; } = new Dictionary<string, int>();
 
         static void Main(string[] args)
         {
@@ -39,26 +36,22 @@ namespace TwitchIRC
                     Console.WriteLine("Time must be at least 2000ms");
                 else
                 {
-                    _timeToRun = options.TimeToFetch;
+                    var timeToRun = options.TimeToFetch;
 
                     // Create one producer thread for each channel & ignore duplicate channels
                     foreach (var channel in options.Channels.Split(',').Distinct())
                         new Thread(new ParameterizedThreadStart(CommentFetcher)).Start(channel);
 
-                    var consumer = new Thread(CommentConsumer);
-                    consumer.Start();
+                    // Create two consumers
+                    new Thread(CommentConsumer).Start();
+                    new Thread(CommentConsumer).Start();
 
                     Console.WriteLine($"Word frequency will be displayed in {options.TimeToFetch / 1000}s");
 
-                    // UI thread sleeps for time indicated by user after which threads are cancelled
-                    Thread.Sleep((int)options.TimeToFetch + 500);
+                    // UI thread sleeps for user input time
+                    Thread.Sleep((int)options.TimeToFetch);
+                    // End threads using deferred cancellation
                     _cancel = true;
-                    try
-                    {
-                        if (consumer.ThreadState == System.Threading.ThreadState.WaitSleepJoin)
-                            consumer.Abort();
-                    }
-                    catch (ThreadAbortException) { }
 
                     Console.Clear();
                     if (WordFrequency.Count == 0)
@@ -66,11 +59,10 @@ namespace TwitchIRC
                     else
                     {
                         Console.WriteLine("***Word Frequency***");
-                        WordFrequency.OrderBy(k => k.Key);
+                        
                         foreach (var pair in WordFrequency.OrderByDescending(i => i.Value).Take(15))
-                        {
                             Console.WriteLine($"({pair.Value}) {pair.Key}");
-                        }
+
                         AskExportToCSV();
                     }
                 }
@@ -84,6 +76,9 @@ namespace TwitchIRC
             Console.ReadLine();
         }
 
+        /// <summary>
+        /// Asks user if he would like to export the word frequency dictionary to a CSV file
+        /// </summary>
         static void AskExportToCSV()
         {
             Console.WriteLine("Would you like to export the above list to a CSV file? (y/n)");
@@ -97,12 +92,19 @@ namespace TwitchIRC
             if (userInput == "y")
             {
                 string fileTitle = $"wordFreq--{DateTime.Now.ToString("dd-MM-yyyy--hh-mm-ss")}.csv";
-                string headers = "Word,Frequency\n";
+                string headers = "Word,Frequency" + Environment.NewLine;
+
                 string csv = headers + string.Join(Environment.NewLine,
                                                    WordFrequency.OrderByDescending(d => d.Value)
                                                                 .Select(d => d.Key.Replace(',','_') + "," + d.Value));
 
-                File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), fileTitle), csv);
+                string path = Path.Combine(Directory.GetCurrentDirectory(), fileTitle);
+                File.WriteAllText(path, csv);
+
+                // Open file
+                try { Process.Start("notepad.exe", path); }
+                catch (Win32Exception) { /* User doesn't have notepad installed */ }
+
                 Console.WriteLine($"{fileTitle} saved");
             }
 
@@ -114,43 +116,35 @@ namespace TwitchIRC
         {
             Debug.WriteLine($"Producer thread {Thread.CurrentThread.ManagedThreadId} starting");
 
-            var client = new TwitchClient(_timeToRun);
+            var producer = new Producer();
 
-            client.CommentReceived += Client_CommentReceived;
-            client.ErrorReceived += Client_ErrorReceived;
+            producer.CommentReceived += Producer_CommentReceived;
+            producer.ErrorReceived += Producer_ErrorReceived;
 
-            client.Connect(channel.ToString());
-            
-            client.CommentReceived -= Client_CommentReceived;
-            client.ErrorReceived -= Client_ErrorReceived;
-            
+            producer.Connect(channel.ToString());
+
+            while (!_cancel)
+                ; // Do nothing
+
+            producer.CommentReceived -= Producer_CommentReceived;
+            producer.ErrorReceived -= Producer_ErrorReceived;
+
             Debug.WriteLine($"Producer thread {Thread.CurrentThread.ManagedThreadId} ending");
         }
 
-
-        static void Client_CommentReceived(object sender, string comment)
-        {
-            Debug.WriteLine("Comment received");
-
-            empty.WaitOne();
-            mutex.WaitOne();
-            
+        static void Producer_CommentReceived(object sender, string comment)
+        {           
+            _commentMutex.WaitOne();
             // *** START CRITICAL SECTION ***
-            
-            ++count;
 
-            Buffer[count] = comment;
+            //Debug.WriteLine($"{comment} produced");
+            CommentList.Add(comment);
 
             // *** END CRITICAL SECTON ***
-
-            mutex.ReleaseMutex();
-            full.Release();
-            
-            // Uncomment to observe comments being received in real-time
-            //Console.WriteLine($"{comment} produced");
+            _commentMutex.ReleaseMutex();         
         }
 
-        static void Client_ErrorReceived(object sender, string error)
+        static void Producer_ErrorReceived(object sender, string error)
         {
             Console.WriteLine(error);
             Console.WriteLine("Aborting...");
@@ -166,43 +160,41 @@ namespace TwitchIRC
 
             do
             {
-                full.WaitOne();
-                mutex.WaitOne();
+                string item = string.Empty;
 
-                Debug.WriteLine("Comment being processed");
+                lock(_countLock)
+                {
+                    // Only take items which have not yet been taken
+                    if (CommentList.Count > _count)
+                    {
+                        item = CommentList.ElementAt(_count++);
+                    }
+                }
 
-                // *** START CRITICAL SECTION ***
-
-                string item = Buffer[count];
-                
-                --count;
-
-                // *** END CRITICAL SECTON ***
-
-                mutex.ReleaseMutex();
-                empty.Release();
-
+                // Ignore null/empty strings
+                if (string.IsNullOrWhiteSpace(item))
+                    continue;
 
                 // Split comment into words
                 string[] words = item.Split(' ');
 
+                _wordFreqMutex.WaitOne();
+                // *** START WORD FREQUENCY CRITICAL SECTION ***
 
                 // Add words to word cloud
                 foreach (var rawWord in words)
                 {
                     string word = rawWord.Trim();
-
+                    
                     // If dictionary does not contain the word, add a new entry
                     if (!WordFrequency.Keys.Any(s => s == word))
-                    {
                         WordFrequency.Add(word, 1);
-                    }
                     else // Dictionary already contains word, increment its count
-                    {
                         ++WordFrequency[word];
-                    }
                 }
 
+                // *** END WORD FREQUENCY CRITICAL SECTON ***
+                _wordFreqMutex.ReleaseMutex();
             }
             while (!_cancel);
 
